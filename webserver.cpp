@@ -1,3 +1,4 @@
+#include <regex>
 #include <memory>
 #include <map>
 #include <cstdint>
@@ -6,6 +7,7 @@
 #include <cstring>
 #include <evhttp.h>
 #include <sstream>
+#include <algorithm>
 
 #include "json.hpp"
 #include "webserver.hpp"
@@ -186,6 +188,12 @@ int startWebServer(serverenv *env) {
 	res = PQexecParams(env->conn, query, 2, NULL, qparams, NULL, NULL, 0);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK) {
 	    std::cout << "Can't select from db" << std::endl;
+	    std::string html = ("{ \"status\":\"fail\" }");
+	    evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+	    evbuffer_add_printf(OutBuf, "%s", html.c_str());
+	    evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+	    free(data);
+	    return;
 	}
 	int nrows = PQntuples(res);
 	if (nrows == 1) {
@@ -193,8 +201,9 @@ int startWebServer(serverenv *env) {
 	    const char* uparams[3];
 	    uparams[0] = userid.c_str();
 	    uparams[1] = token.c_str();
-	    uparams[1] = pubkey.c_str();
-
+	    uparams[2] = pubkey.c_str();
+	    std::cout << "Query: " << update << " params: " << userid << "<>" << token << "<>" << pubkey << std::endl;
+	
 	    res = PQexecParams(env->conn, update, 3, NULL, uparams, NULL, NULL, 0);
 	    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
 	        std::string html = ("{ \"status\":\"fail\" }");
@@ -202,7 +211,7 @@ int startWebServer(serverenv *env) {
 	        evbuffer_add_printf(OutBuf, "%s", html.c_str());
 	        evhttp_send_reply(req, HTTP_OK, "", OutBuf);
 	    } else {
-	        std::string html = ("{ \"status\":\"ok\" }");
+	        std::string html = ("{ \"status\":\"ok\", \"runnerid\":\""+ userid +"\", \"token\":\""+token+"\" }");
 	        evhttp_add_header(req->output_headers, "Content-Type", "application/json");
 	        evbuffer_add_printf(OutBuf, "%s", html.c_str());
 	        evhttp_send_reply(req, HTTP_OK, "", OutBuf);
@@ -214,6 +223,61 @@ int startWebServer(serverenv *env) {
 	    evhttp_send_reply(req, HTTP_OK, "", OutBuf);
 	}
 	free(data);
+    } else if (std::string(uri).compare("/task/pull") == 0) {
+	struct evbuffer* buf = evhttp_request_get_input_buffer(req);
+	size_t len = evbuffer_get_length(buf);
+	char* data = (char*)malloc(len + 1);
+	bzero(data, len+1);
+	evbuffer_copyout(buf, data, len);
+	json requestJson = json::parse(std::string(data));
+	json object = requestJson["taskpull"];
+	std::string runnerid = object["runnerid"];
+	std::string token = object["token"];
+	PGresult* res = NULL;
+	const char* query = "SELECT * FROM nodes WHERE id=$1 AND token=$2;";
+	const char* qparams[2];
+	qparams[0] = runnerid.c_str();
+	qparams[1] = token.c_str();
+	res = PQexecParams(env->conn, query, 2, NULL, qparams, NULL, NULL, 0);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+	    std::cout << "Can't select from db" << std::endl;
+	    std::string html = ("{ \"data\":\"fail\" }");
+	    evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+	    evbuffer_add_printf(OutBuf, "%s", html.c_str());
+	    evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+	    free(data);
+	    return;
+	}
+	int nrows = PQntuples(res);
+	if (nrows == 1) {
+	    const char* update = "UPDATE nodes SET last_run=NOW() WHERE id=$1 AND token=$2";
+	    const char* uparams[2];
+	    uparams[0] = runnerid.c_str();
+	    uparams[1] = token.c_str();
+	    std::cout << "Query: " << update << " params: " << runnerid << "<>" << token << std::endl;
+	    res = PQexecParams(env->conn, update, 2, NULL, uparams, NULL, NULL, 0);
+	    if (PQresultStatus(res) == PGRES_COMMAND_OK) {
+	        std::string html = "{ \"data\":\"wait\" }";
+	        evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+	        evbuffer_add_printf(OutBuf, "%s", html.c_str());
+	        evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+	        free(data);
+	    } else {
+	        std::cout << "Can't update in db" << std::endl;
+	        std::string html = ("{ \"data\":\"fail\" }");
+	        evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+	        evbuffer_add_printf(OutBuf, "%s", html.c_str());
+	        evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+	        free(data);
+	        return;
+	    }
+	} else {
+	    std::string html = "{ \"data\":\"badauth\" }";
+	    evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+	    evbuffer_add_printf(OutBuf, "%s", html.c_str());
+	    evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+	    free(data);
+	}
     } else if (std::string(uri).compare("/task/push") == 0) {
 	struct evbuffer* buf = evhttp_request_get_input_buffer(req);
 	size_t len = evbuffer_get_length(buf);
@@ -248,6 +312,16 @@ int startWebServer(serverenv *env) {
 	std::string html = ("{ \"status\":\"next\" }");
 	evhttp_add_header(req->output_headers, "Content-Type", "application/json");
 	evbuffer_add_printf(OutBuf, "%s", html.c_str());
+	evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+    } else if (std::string(uri).compare("/download/keys/coordinator") == 0) {
+        std::ifstream t("var/public.pem");
+        std::string publicKey((std::istreambuf_iterator<char>(t)),
+                 std::istreambuf_iterator<char>());
+	//std::replace(publicKey.begin(), publicKey.end(), "\n", "\\n")
+	publicKey = std::regex_replace(publicKey, std::regex("\n"), "\\n");
+	std::string response_json = ("{ \"coordinators\":[ \""+publicKey+"\" ]}");
+	evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+	evbuffer_add_printf(OutBuf, "%s", response_json.c_str());
 	evhttp_send_reply(req, HTTP_OK, "", OutBuf);
     } else {
         if (query) {
