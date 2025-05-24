@@ -1,0 +1,106 @@
+#!/usr/bin/python3
+
+import time
+import re
+import yaml
+import json
+import sys
+import os
+import subprocess
+import tarfile
+import hashlib
+import base64
+import requests
+
+#
+from pprint import pprint
+
+def getAckonCoordinatorTokenAndId(login, password):
+    url = "http://server.ackon:8085/coordinator/login/signin?login=" + login + "&password=" + password
+    response = json.loads(requests.get(url).content.decode('ascii'));
+    pprint(response)
+    runnerid = response["coordinatorid"]
+    token = response["token"]
+    return runnerid, token
+
+def sendAckonCoordinatorPubkey(coordinatorid, token, pubkey):
+    format = {
+        "sendpubkey": {
+            "coordinatorid": coordinatorid,
+            "token": token,
+            "pubkey": pubkey,
+        }
+    }
+    resp = requests.post("http://server.ackon:8085/coordinator/login/pubkey", json=format).content
+    pprint(resp)
+    pprint(resp.decode('ascii'))
+    response = json.loads(resp.decode('ascii'))
+    if response["status"] == "ok":
+        return True
+    else:
+        return False
+
+def help():
+    print("ackon-coordinator-tool (action)")
+    print("")
+    print(" ackon-coordinator login (username) (password)")
+    print("")
+
+def downloadKeys():
+    configdir = os.path.expanduser("./var")
+    if not os.path.isdir(configdir):
+        os.mkdir(configdir)
+    if not os.path.isdir(configdir + "/certs"):
+        os.mkdir(configdir + "/certs")
+    if not os.path.isdir(configdir + "/certs/coordinators"):
+        os.mkdir(configdir + "/certs/coordinators")
+    #download server public keys
+    #download coordinator public keys
+    url = "http://server.ackon:8085/download/list/coordinators"
+    response = json.loads(requests.get(url).content.decode('ascii'));
+    pprint(response)
+    for key in response['keys']:
+        m = hashlib.sha256()
+        m.update(key.encode('ascii'))
+        fname = m.hexdigest()
+        with open(configdir + "/certs/coordinators/" + fname + ".pub", "w") as pem:
+            pem.write(key)
+
+def login(login,password):
+    configdir = os.path.expanduser("./var")
+    if not os.path.isdir(configdir):
+        os.mkdir(configdir)
+    loginfile = os.path.expanduser("./var/coordinator-login")
+    if os.path.exists(loginfile):
+        print("Already logged in. Please erace ./var directory before new login")
+        return
+    coordinatorid, token = getAckonCoordinatorTokenAndId(login, password)
+#               - "openssl genrsa 3072" - stdout private
+# stdin private -  "| openssl rsa -pubout" - stdout public
+    private = subprocess.run(["openssl", "genrsa", "3072"], capture_output=True)
+    public = subprocess.run(["openssl", "rsa", "-pubout"], input=private.stdout, capture_output=True)
+    format = {
+        "coordinator": coordinatorid,
+        "token": token
+    }
+    with open(loginfile, "w") as config:
+        if sendAckonCoordinatorPubkey(coordinatorid, token, public.stdout.decode('ascii')):
+            config.write(json.dumps(format))
+            print("Login successfully")
+    with open(configdir + "/private.pem", "w") as pfile:
+        pfile.write(private.stdout.decode('ascii'))
+    with open(configdir + "/public.pem", "w") as pfile:
+        pfile.write(public.stdout.decode('ascii'))
+    downloadKeys()
+
+if (len(sys.argv)) < 2:
+    help()
+elif sys.argv[1] == "help":
+    help()
+elif sys.argv[1] == "login":
+    if len(sys.argv) < 4:
+        help()
+    else:
+        login(sys.argv[2], sys.argv[3])
+else:
+    help()
