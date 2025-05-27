@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 
+#include "slots.hpp"
 #include "webserver.hpp"
 #include "env.hpp"
 #include <sys/stat.h>
@@ -31,7 +32,9 @@ int main(int argc, char* argv[]) {
 	std::cout << "Can't connect to db" << std::endl;
     }
     PQsetNoticeProcessor(env.conn, processNotice, NULL);
+    init_slots();
 
     startWebServer(&env);
     return 0;
 }
+

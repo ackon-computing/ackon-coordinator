@@ -8,7 +8,7 @@ set (CMAKE_CXX_FLAGS "-std=c++17 -g -O2")
 
 include_directories(/usr/include/postgresql/)
 
-add_executable(ackon-coordinator main.cpp webserver.cpp sign.cpp)
+add_executable(ackon-coordinator main.cpp webserver.cpp sign.cpp format.cpp slots.cpp)
 
 target_link_libraries(ackon-coordinator stdc++fs)
 #target_link_libraries(webmake cargs)

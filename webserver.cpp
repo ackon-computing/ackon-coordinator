@@ -9,9 +9,14 @@
 #include <sstream>
 #include <algorithm>
 
+#include <filesystem>
+namespace fs = std::filesystem;
+
 #include "json.hpp"
 #include "webserver.hpp"
 #include "sign.hpp"
+#include "format.hpp"
+#include "slots.hpp"
 
 #define SERVER_NAME "ackon-server/1.0"
 //#define SERVER_POWERED "HA Solutions"
@@ -33,6 +38,15 @@ std::string urlDecode(std::string &SRC) {
         }
     }
     return (ret);
+}
+
+long long getCoordinatorId() {
+    std::ifstream t("var/coordinator-login");
+    std::string userconfig((std::istreambuf_iterator<char>(t)),
+                 std::istreambuf_iterator<char>());
+    json config = json::parse(userconfig);
+    std::string idstr = config["coordinator"];
+    return std::stoll(idstr);
 }
 
 std::map<std::string, std::string> parseParams(std::string in) {
@@ -257,11 +271,23 @@ int startWebServer(serverenv *env) {
 	    std::cout << "Query: " << update << " params: " << runnerid << "<>" << token << std::endl;
 	    res = PQexecParams(env->conn, update, 2, NULL, uparams, NULL, NULL, 0);
 	    if (PQresultStatus(res) == PGRES_COMMAND_OK) {
-	        std::string html = "{ \"data\":\"wait\" }";
-	        evhttp_add_header(req->output_headers, "Content-Type", "application/json");
-	        evbuffer_add_printf(OutBuf, "%s", html.c_str());
-	        evhttp_send_reply(req, HTTP_OK, "", OutBuf);
-	        free(data);
+		json* task = fetch_task();
+		if (task == 0) {
+		    std::string html = "{ \"data\":\"wait\" }";
+		    evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+		    evbuffer_add_printf(OutBuf, "%s", html.c_str());
+		    evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+		    free(data);
+		} else {
+		    json full = json::object();
+		    full["format"] = *task;
+		    full["data"] = "task";
+		    std::string html = full.dump();
+		    evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+		    evbuffer_add_printf(OutBuf, "%s", html.c_str());
+		    evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+		    free(data);
+		}
 	    } else {
 	        std::cout << "Can't update in db" << std::endl;
 	        std::string html = ("{ \"data\":\"fail\" }");
@@ -294,32 +320,103 @@ int startWebServer(serverenv *env) {
 	//for key, value in format["task"]["unsigned"]["attached-files-raw"]["others"]:
 	//    rawtosign = (rawtosign + value + "\n")
 	    "mode=" + std::string(responseJson["task"]["mode"]) + "\n" +
-	    "userid=" +std::string(responseJson["task"]["user"]["userid"]) + "\n";
-	std::string uc(responseJson["task"]["user-signature"]);
-	const char *sign = uc.c_str();
-	char *signpass = (char*)malloc(strlen(sign) + 1);
-	bzero(signpass, strlen(sign)+1);
-	strcpy(signpass, sign);
-	std::ifstream t("certs/users/" +std::string(responseJson["task"]["user"]["userid"])+ ".pem");
-	std::string   userPubKey((std::istreambuf_iterator<char>(t)),
-	             std::istreambuf_iterator<char>());
-	if (!verify(rawtosign, signpass, userPubKey)) {
-	    std::string html = ("{ \"status\":\"fail\", \"step\":\"user-sign\" }");
+	    "userid=" +std::string(responseJson["task"]["user"]["userid"]) + "\n" +
+	    "taskid=" +std::string(responseJson["task"]["task-id"]) + "\n";
+	
+//	std::cout << "debug print rawtosign " << std::endl << rawtosign << std::endl;
+	
+	std::string uc(responseJson["task"]["server-signature"]);
+//	std::cout << "debug print uc" << std::endl << uc << std::endl;
+	const char *csign = uc.c_str();
+	char *signpass = (char*)malloc(strlen(csign) + 1);
+	bzero(signpass, strlen(csign)+1);
+	strcpy(signpass, csign);
+	bool is_verify = false;
+	
+	std::string path = "var/certs/servers/";
+	for (const auto & entry : fs::directory_iterator(path)) {
+//	    std::cout << entry.path() << std::endl;
+	    std::ifstream t(entry.path());
+	    std::string   serverPubKey((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+	    if (verify(rawtosign, signpass, serverPubKey)) {
+		is_verify = true;
+		break;
+	    }
+	}
+	if (!is_verify) {
+	    std::string html = ("{ \"status\":\"fail\", \"step\":\"server-sign\" }");
 	    evhttp_add_header(req->output_headers, "Content-Type", "application/json");
 	    evbuffer_add_printf(OutBuf, "%s", html.c_str());
 	    evhttp_send_reply(req, HTTP_OK, "", OutBuf);
 	}
+	
+	long long coordid = getCoordinatorId();
+	responseJson["task"]["coordinator"]["coordinatorid"] = std::to_string(coordid);
+	
+	rawtosign = std::string(responseJson["task"]["attached-files-hashes"]["Dockerfile"]) + "\n" +
+	    std::string(responseJson["task"]["attached-files-hashes"]["upload.creds"]) + "\n" +
+	    std::string(responseJson["task"]["attached-files-hashes"]["scaling.yaml"]) + "\n" +
+	    std::string(responseJson["task"]["attached-files-hashes"]["duplication.yaml"]) + "\n" +
+	    std::string(responseJson["task"]["attached-files-hashes"]["urls_list"]["hash"]) + "\n" +
+	//for key, value in format["task"]["unsigned"]["attached-files-raw"]["others"]:
+	//    rawtosign = (rawtosign + value + "\n")
+	    "mode=" + std::string(responseJson["task"]["mode"]) + "\n" +
+	    "userid=" +std::string(responseJson["task"]["user"]["userid"]) + "\n" +
+	    "taskid=" +std::string(responseJson["task"]["task-id"]) + "\n" +
+	    "coordinatorid=" + std::to_string(coordid) + "\n" +
+	    std::string(responseJson["task"]["server-signature"]) + "\n";
+	
+	responseJson["task"]["coordinator-signature"] = sign(rawtosign);
+	
+	PGresult* res = NULL;
+	const char* count = "select count(*) from nodes WHERE last_run > NOW() - INTERVAL '2 minutes';";
+	res = PQexec(env->conn, count);
+	if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+	    char* count = PQgetvalue(res, 0, 0);
+	    std::cout << "nodes online is " << count << std::endl;
+	}
+	
+	//save task and create pull counter
+	responseJson["task"]["unsigned"]["status"] = std::string("task");
+	responseJson["task"]["unsigned"]["index"] =  json::object();
+	responseJson["task"]["unsigned"]["index"]["n"] = 0;
+	responseJson["task"]["unsigned"]["index"]["of"] = 0;
+	
+	int shards = getShardsCountFrom(
+		responseJson["task"]["unsigned"]["attached-files-raw"]["urls_list"]["content"],
+		responseJson["task"]["unsigned"]["attached-files-raw"]["urls_list"]["rows"],
+		responseJson["task"]["attached-files-hashes"]["urls_list"]["hash"]);
+	int duplication = getDuplicationCountFrom(
+		responseJson["task"]["unsigned"]["attached-files-raw"]["duplication.yaml"],
+		responseJson["task"]["attached-files-hashes"]["duplication.yaml"]);
+	
+	int runs = shards * duplication;
+	responseJson["task"]["unsigned"]["index"]["of"] = runs;
+	
+	//create slots
+	new_batch(responseJson, runs);
+	std::cout << responseJson.dump() << std::endl;
+	
 	std::string html = ("{ \"status\":\"next\" }");
 	evhttp_add_header(req->output_headers, "Content-Type", "application/json");
 	evbuffer_add_printf(OutBuf, "%s", html.c_str());
 	evhttp_send_reply(req, HTTP_OK, "", OutBuf);
     } else if (std::string(uri).compare("/download/keys/coordinator") == 0) {
-        std::ifstream t("var/public.pem");
-        std::string publicKey((std::istreambuf_iterator<char>(t)),
-                 std::istreambuf_iterator<char>());
-	//std::replace(publicKey.begin(), publicKey.end(), "\n", "\\n")
-	publicKey = std::regex_replace(publicKey, std::regex("\n"), "\\n");
-	std::string response_json = ("{ \"coordinators\":[ \""+publicKey+"\" ]}");
+	std::string path = "var/certs/coordinators/";
+	std::string response_json = ("{ \"coordinators\":[ ");
+	for (const auto & entry : fs::directory_iterator(path)) {
+	    std::cout << entry.path() << std::endl;
+	    std::ifstream t(entry.path());
+	    std::string publicKey((std::istreambuf_iterator<char>(t)),
+	         std::istreambuf_iterator<char>());
+	    publicKey = std::regex_replace(publicKey, std::regex("\n"), "\\n");
+	    if (response_json.length() == std::string("{ \"coordinators\":[ ").length()) {
+		response_json.append(" \"" + publicKey + "\"");
+	    } else {
+		response_json.append(", \"" + publicKey + "\"");
+	    }
+	}
+	response_json.append("]}");
 	evhttp_add_header(req->output_headers, "Content-Type", "application/json");
 	evbuffer_add_printf(OutBuf, "%s", response_json.c_str());
 	evhttp_send_reply(req, HTTP_OK, "", OutBuf);

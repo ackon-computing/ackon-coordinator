@@ -52,9 +52,21 @@ def downloadKeys():
         os.mkdir(configdir)
     if not os.path.isdir(configdir + "/certs"):
         os.mkdir(configdir + "/certs")
+    if not os.path.isdir(configdir + "/certs/servers"):
+
+        os.mkdir(configdir + "/certs/servers")
     if not os.path.isdir(configdir + "/certs/coordinators"):
         os.mkdir(configdir + "/certs/coordinators")
     #download server public keys
+    url = "http://server.ackon:8085/download/list/servers"
+    response = json.loads(requests.get(url).content.decode('ascii'));
+    pprint(response)
+    for key in response['keys']:
+        m = hashlib.sha256()
+        m.update(key.encode('ascii'))
+        fname = m.hexdigest()
+        with open(configdir + "/certs/servers/" + fname + ".pub", "w") as pem:
+            pem.write(key)
     #download coordinator public keys
     url = "http://server.ackon:8085/download/list/coordinators"
     response = json.loads(requests.get(url).content.decode('ascii'));
@@ -65,6 +77,11 @@ def downloadKeys():
         fname = m.hexdigest()
         with open(configdir + "/certs/coordinators/" + fname + ".pub", "w") as pem:
             pem.write(key)
+    coordpeers = []
+    for peer in response["addresses"]:
+        coordpeers.append(peer)
+    with open(configdir + "/peers", "w") as listfile:
+        listfile.write(json.dumps(coordpeers))
 
 def login(login,password):
     configdir = os.path.expanduser("./var")
