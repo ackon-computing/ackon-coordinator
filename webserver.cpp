@@ -401,6 +401,71 @@ int startWebServer(serverenv *env) {
 	evhttp_add_header(req->output_headers, "Content-Type", "application/json");
 	evbuffer_add_printf(OutBuf, "%s", html.c_str());
 	evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+    } else if (std::string(uri).compare("/task/report") == 0) {
+	struct evbuffer* buf = evhttp_request_get_input_buffer(req);
+	size_t len = evbuffer_get_length(buf);
+	char* data = (char*)malloc(len + 1);
+	bzero(data, len+1);
+	evbuffer_copyout(buf, data, len);
+	json responseJson = json::parse(std::string(data));
+	
+	json report = responseJson["report"];
+	std::string runnerid = responseJson["runnerid"];
+	std::string token = responseJson["token"];
+	PGresult* res = NULL;
+	const char* query = "SELECT * FROM nodes WHERE id=$1 AND token=$2;";
+	const char* qparams[2];
+	qparams[0] = runnerid.c_str();
+	qparams[1] = token.c_str();
+	res = PQexecParams(env->conn, query, 2, NULL, qparams, NULL, NULL, 0);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+	    std::cout << "Can't select from db" << std::endl;
+	    std::string html = ("{ \"data\":\"fail\" }");
+	    evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+	    evbuffer_add_printf(OutBuf, "%s", html.c_str());
+	    evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+	    free(data);
+	    return;
+	}
+	
+	std::cout << report.dump() << std::endl;
+	
+	long long coordid = getCoordinatorId();
+	std::string rawtosign = std::string(report["task"]["attached-files-hashes"]["Dockerfile"]) + "\n" +
+	    std::string(report["task"]["attached-files-hashes"]["upload.creds"]) + "\n" +
+	    std::string(report["task"]["attached-files-hashes"]["scaling.yaml"]) + "\n" +
+	    std::string(report["task"]["attached-files-hashes"]["duplication.yaml"]) + "\n" +
+	    std::string(report["task"]["attached-files-hashes"]["urls_list"]["hash"]) + "\n" +
+	//for key, value in format["task"]["unsigned"]["attached-files-raw"]["others"]:
+	//    rawtosign = (rawtosign + value + "\n")
+	    "mode=" + std::string(report["task"]["mode"]) + "\n" +
+	    "userid=" +std::string(report["task"]["user"]["userid"]) + "\n" +
+	    "taskid=" +std::string(report["task"]["task-id"]) + "\n" +
+	    "coordinatorid=" + std::to_string(coordid) + "\n" +
+	    std::string(report["task"]["server-signature"]) + "\n" + 
+	    std::string(report["task"]["coordinator-signature"]) + "\n" + 
+	    "runnerid=" + std::string(report["task"]["runner"]["runnerid"]) + "\n" +
+	    "n=" + std::to_string((int)report["task"]["unsigned"]["index"]["n"]) + "\n" +
+	    "of=" + std::to_string((int)report["task"]["unsigned"]["index"]["of"]) + "\n" +
+	    std::string(report["task"]["runner-signature"]) + "\n";
+	
+	std::string signature = sign(rawtosign);
+	
+	set_done(
+	    (int)report["task"]["unsigned"]["index"]["n"],
+	    (int)report["task"]["unsigned"]["index"]["of"],
+	    std::stoi(std::string(report["task"]["task-id"])),
+	    std::stoi(std::string(report["task"]["runner"]["runnerid"])),
+	    std::string(report["task"]["runner-signature"]),
+	    signature
+	);
+	
+	std::string html = ("{ \"report\":\"saved\" }");
+	evhttp_add_header(req->output_headers, "Content-Type", "application/json");
+	evbuffer_add_printf(OutBuf, "%s", html.c_str());
+	evhttp_send_reply(req, HTTP_OK, "", OutBuf);
+	free(data);
+	return;
     } else if (std::string(uri).compare("/download/keys/coordinator") == 0) {
 	std::string path = "var/certs/coordinators/";
 	std::string response_json = ("{ \"coordinators\":[ ");

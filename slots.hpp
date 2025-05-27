@@ -24,8 +24,12 @@ typedef struct {
     int of;
     json data;
     int status;
+
+    int runnerid;
+    std::string runnerSignature;
 } task;
 
 void init_slots();
 void new_batch(json data, int of);
 json* fetch_task();
+void set_done(int n, int of, int batch_id, int runnerid, std::string runnerSignature, std::string coordinatorStatusSignature);
