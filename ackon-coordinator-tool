@@ -44,6 +44,7 @@ def help():
     print("ackon-coordinator-tool (action)")
     print("")
     print(" ackon-coordinator login (username) (password)")
+    print(" ackon-coordinator server-sync")
     print("")
 
 def downloadKeys():
@@ -110,6 +111,33 @@ def login(login,password):
         pfile.write(public.stdout.decode('ascii'))
     downloadKeys()
 
+def serverSync():
+    print("Starting sync with server")
+    configdir = os.path.expanduser("./var")
+    if not os.path.isdir(configdir):
+        print("Please run ./ackon-coordinator-tool login as first")
+        sys.exit(2)
+    loginfile = os.path.expanduser("./var/coordinator-login")
+    if not os.path.exists(loginfile):
+        print("Please run ./ackon-coordinator-tool login as first")
+        sys.exit(2)
+    with open(loginfile, "r") as config:
+        config = json.loads(config.read())
+    pprint(config)
+
+    url = "http://server.ackon:8085/coordinator/report?coordinatorid=" + config["coordinator"] + "&token=" + config["token"]
+
+    subprocess.run(["mkdir", "-p", "./var/upload"])
+    subprocess.Popen("mv ./var/done/* ./var/upload/", shell=True, stdout=subprocess.PIPE).stdout.read()
+    subprocess.run(["tar", "-czvf", "./var/upload.tar.gz", "./var/upload"])
+    
+    with open('./var/upload.tar.gz', 'rb') as file:
+        targz = file.read()
+        headers = { "Content-Type": "application/tar+gzip" }
+        response = requests.post(url, data=targz, headers=headers).content
+        pprint(response)
+
+
 if (len(sys.argv)) < 2:
     help()
 elif sys.argv[1] == "help":
@@ -119,5 +147,7 @@ elif sys.argv[1] == "login":
         help()
     else:
         login(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "server-sync":
+    serverSync()
 else:
     help()
