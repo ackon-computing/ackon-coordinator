@@ -146,7 +146,7 @@ int startWebServer(serverenv *env) {
 	std::string html = "";
 	if ((found) && (userid > 0)) {
 	    //
-	    const char* insert = "INSERT INTO nodes (user_id, token) VALUES ($1, $2)  RETURNING ID;";
+	    const char* insert = "INSERT INTO nodes (user_id, token, ptu_summ) VALUES ($1, $2, 0)  RETURNING ID;";
 	    char* iparams[2];
 	    iparams[0] = (char*)std::to_string(userid).c_str();
 	    iparams[1] = (char*)malloc(250);
