@@ -366,6 +366,8 @@ int startWebServer(serverenv *env) {
 	    "coordinatorid=" + std::to_string(coordid) + "\n" +
 	    std::string(responseJson["task"]["server-signature"]) + "\n";
 	
+	std::cout << "`" << rawtosign << "`" << std::endl;
+
 	responseJson["task"]["coordinator-signature"] = sign(rawtosign);
 	
 	PGresult* res = NULL;
@@ -451,6 +453,7 @@ int startWebServer(serverenv *env) {
 	
 	std::string signature = sign(rawtosign);
 	
+	std::cout << (report["task"]["unsigned"]["index"]["n"]) << std::endl;
 	set_done(
 	    (int)report["task"]["unsigned"]["index"]["n"],
 	    (int)report["task"]["unsigned"]["index"]["of"],
@@ -459,8 +462,8 @@ int startWebServer(serverenv *env) {
 	    std::string(report["task"]["runner-signature"]),
 	    signature
 	);
-	
-	std::string html = ("{ \"report\":\"saved\" }");
+	report["task"]["coordinator-status-signature"] = signature;
+	std::string html = report.dump();
 	evhttp_add_header(req->output_headers, "Content-Type", "application/json");
 	evbuffer_add_printf(OutBuf, "%s", html.c_str());
 	evhttp_send_reply(req, HTTP_OK, "", OutBuf);

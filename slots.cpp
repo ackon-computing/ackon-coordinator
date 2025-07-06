@@ -55,10 +55,14 @@ void new_batch(json data, int of) {
 	tasks_count++;
 	tasks = (task*)realloc(tasks, sizeof(task) * tasks_count);
 	task* ct = &(tasks[tasks_count - 1]);
+	bzero(ct, sizeof(task));
 	ct->b = cb;
 	ct->n = i;
 	ct->of = of;
 	ct->data = data;
+	
+	//bzero(&(ct->runnerSignature), sizeof(std::string));
+	ct->runnerSignature = new std::string("");
 
 	ct->data["task"]["unsigned"]["index"]["n"] = i;
 	ct->status = task_status_QUEUED;
@@ -90,18 +94,18 @@ void set_done(int n, int of, int batch_id, int runnerid, std::string runnerSigna
 	    (tasks[i].of == of) &&
 	    (tasks[i].b->batch_id = batch_id) &&
 	    (tasks[i].status == task_status_FETCHED)) {
-	    
+	
 	    tasks[i].status = task_status_DONE;
 	    tasks[i].runnerid = runnerid;
-	    tasks[i].runnerSignature = runnerSignature;
+	    tasks[i].runnerSignature->append(runnerSignature);
 	    tasks[i].data["task"]["runner"]["runnerid"] = runnerid;
 	    tasks[i].data["task"]["runner-signature"] = runnerSignature;
 	    tasks[i].data["task"]["coordinator-status-signature"] = coordinatorStatusSignature;
-	    
+	
 	    tasks[i].data["task"]["unsigned"].erase("attached-files-raw");
 	    tasks[i].data["task"]["unsigned"].erase("extracted-yamls");
 	    exportSlot(tasks[i].data);
-	    
+	
 	    tasks[i].b->done_count++;
 	
 	    break;

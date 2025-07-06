@@ -26,7 +26,7 @@ typedef struct {
     int status;
 
     int runnerid;
-    std::string runnerSignature;
+    std::string* runnerSignature;
 } task;
 
 void init_slots();
